@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Flappy Bird</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            background-color: #f0f0f0;
+            font-family: Arial, sans-serif;
+        }
+        canvas {
+            border: 2px solid #000;
+            background-color: #87CEEB;
+        }
+        #game-container {
+            position: relative;
+        }
+        #start-button {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            padding: 15px 30px;
+            background-color: #c8c8c8;
+            border: none;
+            border-radius: 5px;
+            font-size: 18px;
+            cursor: pointer;
+            display: block;
+        }
+        #start-button:hover {
+            background-color: #b0b0b0;
+        }
+    </style>
+</head>
+<body>
+    <div id="game-container">
+        <canvas id="game-canvas" width="400" height="600"></canvas>
+        <button id="start-button">PLAY</button>
+    </div>
+
+    <script>
+        // Game constants
+        const WIDTH = 400;
+        const HEIGHT = 600;
+        const GRAVITY = 0.5;
+        const FLAP_STRENGTH = -10;
+        const BASE_PIPE_SPEED = 3;
+        const MAX_SPEED_MULTIPLIER = 2;
+        const SPEED_INCREASE_START_TIME = 60000; // Start increasing speed after 1 minute (60000ms)
+        const SPEED_INCREASE_DURATION = 60000; // Time to reach maximum speed after speed increase begins (1 minute)
+        const PIPE_GAP = 200;
+        const PIPE_FREQUENCY = 1500; // milliseconds
+        const BIRD_SIZE = 30;
+        const PIPE_WIDTH = 60;
+
+        // Colors
+        const WHITE = '#ffffff';
+        const BLACK = '#000000';
+        const GREEN = '#00c800';
+        const BLUE = '#0000ff';
+        const SKY_BLUE = '#87ceeb';
+        const YELLOW = '#ffff00';
+        const RED = '#ff0000';
+
+        // Game elements
+        const canvas = document.getElementById('game-canvas');
+        const ctx = canvas.getContext('2d');
+        const startButton = document.getElementById('start-button');
+
+        // Game state
+        let gameStarted = false;
+        let gameOver = false;
+        let bird;
+        let pipes = [];
+        let score = 0;
+        let lastPipeTime = 0;
+        let gameStartTime = 0;
+        let animationFrameId;
+        let speedMultiplier = 1;
+
+        class Bird {
+            constructor() {
+                this.x = WIDTH / 3;
+                this.y = HEIGHT / 2;
+                this.velocity = 0;
+                this.radius = BIRD_SIZE / 2;
+            }
+
+            flap() {
+                this.velocity = FLAP_STRENGTH;
+            }
+
+            update() {
+                // Apply gravity
+                this.velocity += GRAVITY;
+                this.y += this.velocity;
+
+                // Prevent bird from going above the screen
+                if (this.y - this.radius < 0) {
+                    this.y = this.radius;
+                    this.velocity = 0;
+                }
+            }
+
+            draw() {
+                // Draw the bird (a simple circle)
+                ctx.fillStyle = YELLOW;
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+                ctx.fill();
+                
+                // Draw an eye
+                ctx.fillStyle = BLACK;
+                ctx.beginPath();
+                ctx.arc(this.x + 10, this.y - 5, 5, 0, Math.PI * 2);
+                ctx.fill();
+            }
+
+            checkCollision(pipes) {
+                // Check if bird hits the ground
+                if (this.y + this.radius > HEIGHT) {
+                    return true;
+                }
+
+                // Check if bird hits any pipe
+                for (const pipe of pipes) {
+                    // Check collision with the top pipe
+                    if (this.x + this.radius > pipe.x &&
+                        this.x - this.radius < pipe.x + PIPE_WIDTH &&
+                        this.y - this.radius < pipe.topHeight) {
+                        return true;
+                    }
+
+                    // Check collision with the bottom pipe
+                    if (this.x + this.radius > pipe.x &&
+                        this.x - this.radius < pipe.x + PIPE_WIDTH &&
+                        this.y + this.radius > HEIGHT - pipe.bottomHeight) {
+                        return true;
+                    }
+                }
+
+                return false;
+            }
+        }
+
+        class Pipe {
+            constructor() {
+                this.x = WIDTH;
+                this.passed = false;
+                this.setHeights();
+            }
+
+            setHeights() {
+                this.topHeight = Math.floor(Math.random() * (HEIGHT - PIPE_GAP - 100)) + 50;
+                this.bottomHeight = HEIGHT - this.topHeight - PIPE_GAP;
+            }
+
+            update(speed) {
+                this.x -= speed;
+            }
+
+            draw() {
+                // Draw the top pipe
+                ctx.fillStyle = GREEN;
+                ctx.fillRect(this.x, 0, PIPE_WIDTH, this.topHeight);
+                
+                // Draw the bottom pipe
+                ctx.fillRect(this.x, HEIGHT - this.bottomHeight, PIPE_WIDTH, this.bottomHeight);
+            }
+        }
+
+        // Calculate current speed based on game time
+        function calculateSpeedMultiplier() {
+            const currentTime = Date.now();
+            const elapsedTime = currentTime - gameStartTime;
+            
+            // Don't increase speed until one minute has passed
+            if (elapsedTime < SPEED_INCREASE_START_TIME) {
+                return 1;
+            }
+            
+            // Calculate how far into the speed increase period we are
+            const speedIncreaseTime = elapsedTime - SPEED_INCREASE_START_TIME;
+            const speedIncreaseFraction = Math.min(speedIncreaseTime / SPEED_INCREASE_DURATION, 1);
+            
+            // Linear increase from 1x to 2x
+            return 1 + speedIncreaseFraction * (MAX_SPEED_MULTIPLIER - 1);
+        }
+
+        // Initialize game
+        function initGame() {
+            bird = new Bird();
+            pipes = [];
+            score = 0;
+            gameOver = false;
+            speedMultiplier = 1;
+            gameStartTime = Date.now();
+            lastPipeTime = gameStartTime - PIPE_FREQUENCY; // Ensure a pipe is created immediately
+        }
+
+        // Start screen with background elements
+        function drawStartScreen() {
+            ctx.fillStyle = SKY_BLUE;
+            ctx.fillRect(0, 0, WIDTH, HEIGHT);
+
+            // Draw demo bird
+            ctx.fillStyle = YELLOW;
+            ctx.beginPath();
+            ctx.arc(WIDTH / 3, HEIGHT / 2, BIRD_SIZE / 2, 0, Math.PI * 2);
+            ctx.fill();
+
+            // Draw demo pipes
+            ctx.fillStyle = GREEN;
+            ctx.fillRect(WIDTH - 100, 0, PIPE_WIDTH, 200);
+            ctx.fillRect(WIDTH - 100, 400, PIPE_WIDTH, 200);
+
+            // Draw title
+            ctx.fillStyle = BLACK;
+            ctx.font = '32px Arial';
+            ctx.textAlign = 'center';
+            ctx.fillText('Flappy Bird', WIDTH / 2, HEIGHT / 4);
+        }
+
+        // Create new pipe if it's time
+        function createPipe() {
+            const currentTime = Date.now();
+            // Adjust pipe frequency based on speed (faster game = pipes appear more frequently)
+            const adjustedFrequency = PIPE_FREQUENCY / speedMultiplier;
+            
+            if (currentTime - lastPipeTime > adjustedFrequency) {
+                pipes.push(new Pipe());
+                lastPipeTime = currentTime;
+            }
+        }
+
+        // Update game state
+        function update() {
+            if (gameOver) return;
+
+            // Update speed multiplier based on elapsed time
+            speedMultiplier = calculateSpeedMultiplier();
+            const currentSpeed = BASE_PIPE_SPEED * speedMultiplier;
+
+            bird.update();
+            createPipe();
+
+            // Update pipes and check if bird has passed them
+            for (let i = pipes.length - 1; i >= 0; i--) {
+                pipes[i].update(currentSpeed);
+
+                // Check if bird has passed the pipe
+                if (!pipes[i].passed && pipes[i].x + PIPE_WIDTH < bird.x) {
+                    pipes[i].passed = true;
+                    score++;
+                }
+
+                // Remove pipes that have gone off screen
+                if (pipes[i].x + PIPE_WIDTH < 0) {
+                    pipes.splice(i, 1);
+                }
+            }
+
+            // Check for collisions
+            if (bird.checkCollision(pipes)) {
+                gameOver = true;
+            }
+        }
+
+        // Draw game elements
+        function draw() {
+            // Clear canvas
+            ctx.fillStyle = SKY_BLUE;
+            ctx.fillRect(0, 0, WIDTH, HEIGHT);
+
+            // Draw pipes
+            for (const pipe of pipes) {
+                pipe.draw();
+            }
+
+            // Draw bird
+            bird.draw();
+
+            // Draw score
+            ctx.fillStyle = BLACK;
+            ctx.font = '24px Arial';
+            ctx.textAlign = 'left';
+            ctx.fillText(`Score: ${score}`, 10, 30);
+
+            // Display current speed multiplier if it's greater than 1
+            if (speedMultiplier > 1) {
+                ctx.fillStyle = RED;
+                ctx.textAlign = 'right';
+                ctx.fillText(`Speed: ${speedMultiplier.toFixed(1)}x`, WIDTH - 10, 30);
+            }
+
+            // Draw game over message
+            if (gameOver) {
+                ctx.fillStyle = BLACK;
+                ctx.font = '32px Arial';
+                ctx.textAlign = 'center';
+                ctx.fillText('Game Over!', WIDTH / 2, HEIGHT / 3);
+                
+                ctx.font = '24px Arial';
+                ctx.fillText('Press R to restart', WIDTH / 2, HEIGHT / 3 + 40);
+            }
+        }
+
+        // Game loop
+        function gameLoop() {
+            if (gameStarted) {
+                update();
+                draw();
+            } else {
+                drawStartScreen();
+            }
+
+            animationFrameId = requestAnimationFrame(gameLoop);
+        }
+
+        // Start the game
+        function startGame() {
+            gameStarted = true;
+            startButton.style.display = 'none';
+            initGame();
+        }
+
+        // Event listeners
+        startButton.addEventListener('click', startGame);
+
+        document.addEventListener('keydown', (event) => {
+            if (event.code === 'Space') {
+                if (!gameStarted) {
+                    startGame();
+                } else if (!gameOver) {
+                    bird.flap();
+                }
+            }
+            
+            if (event.code === 'KeyR' && gameOver) {
+                initGame();
+            }
+        });
+
+        canvas.addEventListener('click', () => {
+            if (gameStarted && !gameOver) {
+                bird.flap();
+            }
+        });
+
+        // Start the game loop
+        gameLoop();
+    </script>
+</body>
+</html>
